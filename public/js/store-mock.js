@@ -117,6 +117,7 @@ export async function create() {
       return true;
     },
     async restoreStudent() { return Q.get('u') || sessionStorage.getItem('toui-sid'); },
+    watchMember() { return () => {}; },
     async logoutStudent() { sessionStorage.removeItem('toui-sid'); },
   };
 }

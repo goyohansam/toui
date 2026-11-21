@@ -38,6 +38,13 @@ function sub(key, id, start) {
 function wire() {
   const sid = S.sid;
   const sesId = (sid && S.cls && S.cls.activeSession) || null;
+  sub('mem', !RO && sid, () => store.watchMember((m) => {
+    if (S.sid && (!m || m.sid !== S.sid)) {
+      S.sid = null; S.view = 'home';
+      S.loginErr = ''; toast('이 기기에서 다른 이름으로 들어갔어요. 내 이름으로 다시 들어와 주세요.');
+      upd();
+    }
+  }));
   sub('me', sid, () => store.watch(`${C}/students/${sid}`, (v) => { S.me = v; render(); }));
   sub('ses', sesId, () => store.watch(`${C}/sessions/${sesId}`, (v) => { S.session = v; upd(); }));
   if (!sesId) S.session = null;
@@ -139,8 +146,13 @@ app.addEventListener('click', (e) => {
   if (!el || el.disabled) return;
   if (suppressClick) { suppressClick = false; return; }
   const f = A[el.dataset.act];
-  if (f) Promise.resolve(f(el.dataset)).catch((err) => { console.warn(err); toast('잠깐 문제가 생겼어요. 다시 눌러 주세요.'); });
+  if (f) Promise.resolve().then(() => f(el.dataset)).catch(fail);
 });
+function fail(err) {
+  console.warn(err);
+  const denied = err && err.code === 'permission-denied';
+  toast(denied ? '지금은 저장할 수 없어요. 선생님께 알려 주세요.' : `잠깐 문제가 생겼어요. 다시 눌러 주세요.${err && err.code ? ` (${err.code})` : ''}`);
+}
 // 구슬 길게 누르기 = 취소
 let lp = null;
 app.addEventListener('pointerdown', (e) => {
@@ -171,7 +183,7 @@ const A = {
       if (ok) { S.sid = S.pick; S.pick = null; S.pin = ''; upd(); } else { S.pin = ''; S.loginErr = '핀이 달라요. 다시 눌러 보세요.'; render(); }
     }
   },
-  async logout() { await store.logoutStudent(); S.sid = null; S.view = 'home'; upd(); },
+  async logout() { S.sid = null; S.view = 'home'; upd(); await store.logoutStudent(); },
   enter: () => { S.view = 'talk'; sessionStorage.setItem('toui-in', S.cls.activeSession); render(); },
   async bank() { S.view = 'bank'; S.logs = null; render(); S.logs = (await store.getCol(`${C}/students/${S.sid}/pointLogs`)).sort((a, b) => (b.at || 0) - (a.at || 0)); render(); },
   home: () => { S.view = 'home'; render(); },
@@ -180,6 +192,7 @@ const A = {
 
   // 이끔이
   next: () => (S.group.stage < 7 ? goStage(S.group.stage + 1) : null),
+  prev: () => (S.group.stage > 0 ? goStage(S.group.stage - 1) : null),
   speaker: (d) => G({ speaker: d.sid, timer: { dur: S.session.speakSec, running: false, left: S.session.speakSec } }),
   method: (d) => G({ method: d.id }),
   finish: () => goStage(7),
@@ -231,12 +244,20 @@ const A = {
     render();
   },
   rateGo: (d) => { S.rate.i += +d.n; render(); },
+  rateAsk: (d) => { S.rate.ask = d.on === '1'; render(); },
   async rateSubmit() {
-    if (!canWrite()) return;
-    if (!confirm('제출하면 고칠 수 없어요. 제출할까요?')) return;
-    await store.set(`${S.gp}/ratings/${S.sid}`, { peers: S.rate.peers, together: S.rate.together, submitted: true, at: ts() });
+    if (!canWrite()) { toast('지금은 제출할 수 없어요.'); return; }
+    if (!(S.myRating && S.myRating.submitted)) {
+      try {
+        await store.set(`${S.gp}/ratings/${S.sid}`, { peers: S.rate.peers, together: S.rate.together, submitted: true, at: ts() });
+      } catch (e) {
+        // 이미 제출된 별이 있으면(두 번 누름 등) 그대로 다음으로 넘어간다
+        const cur = await store.get(`${S.gp}/ratings/${S.sid}`).catch(() => null);
+        if (!(cur && cur.submitted)) throw e;
+      }
+    }
     await G({ [`rated.${S.sid}`]: true });
-    S.s7 = 3; render();
+    S.rate.ask = false; S.s7 = 3; render();
   },
   refl: (d) => { S.refl.a[+d.q] = +d.a; render(); },
   async reflSubmit() {
@@ -332,7 +353,7 @@ function beadsCard() {
   const max = Math.max(0, ...counts); const min = Math.min(...counts);
   let hint = '';
   if (order().length > 1 && max - min >= 3) hint = `<p class="hint">💡 ${esc(nm(order()[counts.indexOf(min)]))}에게도 차례를 주자</p>`;
-  return `<div class="card beads"><h3>우리 모둠 발언 구슬</h3><div class="beadrows">${beadsHtml(g, nm, S.fresh)}</div>${hint}</div>`;
+  return `<div class="card beads"><h3>우리 모둠 발언 구슬 <small>말을 한 번 마칠 때마다 1알 · 지킴이가 줘요</small></h3><div class="beadrows">${beadsHtml(g, nm, S.fresh)}</div>${hint}</div>`;
 }
 function stageBar() {
   return `<div class="stagebar"><div class="track"><i data-tm="stagefill"></i></div><span data-tm="stagetext"></span></div>`;
@@ -419,8 +440,9 @@ function stage7() {
         <div class="row">${i > 0 ? '<button class="btn" data-act="rateGo" data-n="-1">◀ 이전</button>' : ''}<button class="btn primary big" data-act="rateGo" data-n="1" ${r.listen && r.mediate ? '' : 'disabled'}>다음 ▶</button></div>`;
     } else {
       body = `<div class="card ratecard team"><small>우리 모둠에 별 주기</small><h2>🧩 함께</h2><p>${esc(S.settings.rating.together)}</p>${stars('together', '', S.rate.together, STAR_TEAM)}</div>
-        <div class="row">${peers.length ? '<button class="btn" data-act="rateGo" data-n="-1">◀ 이전</button>' : ''}<button class="btn primary big" data-act="rateSubmit" ${S.rate.together ? '' : 'disabled'}>별 제출하기 ✔</button></div>
-        <p class="hint">제출하면 고칠 수 없어요. 누가 몇 개 줬는지는 친구들에게 보이지 않아요.</p>`;
+        ${S.rate.ask ? `<div class="card askbox"><h3>제출하면 고칠 수 없어요. 제출할까요?</h3><div class="row"><button class="btn big" data-act="rateAsk" data-on="0">다시 볼래요</button><button class="btn primary big" data-act="rateSubmit">네, 제출해요 ✔</button></div></div>`
+    : `<div class="row">${peers.length ? '<button class="btn" data-act="rateGo" data-n="-1">◀ 이전</button>' : ''}<button class="btn primary big" data-act="rateAsk" data-on="1" ${S.rate.together ? '' : 'disabled'}>별 제출하기 ✔</button></div>`}
+        <p class="hint">누가 몇 개 줬는지는 친구들에게 보이지 않아요.</p>`;
     }
   } else if (step === 3) {
     const all = S.refl.a.every((x) => x !== null);
@@ -457,6 +479,17 @@ function leaderTools(st) {
     const quiet = order().filter((s) => !((g.beads || {})[s]));
     if (quiet.length) h += `<p class="hint">💡 ${quiet.map((s) => esc(nm(s))).join(', ')}의 생각도 들어 볼까?</p>`;
   }
+  const ASK = {
+    2: ['한 친구가 말을 마치면 물어봐요', '기록이가 적은 내용이 맞아?', null],
+    3: ['기록이가 적을 수 있게 물어봐요', '우리 의견의 같은 점을 한 문장으로 말하면?', 'same'],
+    4: ['기록이가 적을 수 있게 물어봐요', '서로 다른 점은 뭐야? 궁금했던 것도 말해 볼까?', 'diff'],
+    5: ['기록이가 적을 수 있게 물어봐요', '그럼 우리 모둠의 결정을 한 문장으로 말해 볼까?', 'decision'],
+    6: ['기록이가 적을 수 있게 물어봐요', '왜 이렇게 정했는지 한 문장으로 말해 볼까?', 'why'],
+  }[st];
+  if (ASK) {
+    const v = ASK[2] ? ((S.record || {})[ASK[2]] || '').trim() : null;
+    h += `<div class="askrec"><small>✏️ ${ASK[0]}</small><p>“${ASK[1]}”</p>${v === null ? '' : v ? `<em class="done">기록이가 적었어요 ✔ <span>${esc(v)}</span></em>` : '<em>기록이가 아직 적지 않았어요</em>'}</div>`;
+  }
   if (st < 7) {
     const together = ses.mode === 'together';
     if (st === 6) {
@@ -466,6 +499,7 @@ function leaderTools(st) {
       h += together ? '<button class="btn big next" disabled>선생님이 넘겨 주실 거예요</button>' : `<button class="btn primary big next" data-act="next">다음 단계로 ▶ <small>${st + 1}. ${STAGES[st + 1].name}</small></button>`;
       h += '<p class="timeup" data-tm="stageup" hidden>⏰ 이제 넘어가도 좋아요</p>';
     }
+    if (!together && st > 0) h += `<button class="btn ghost back" data-act="prev">◀ 이전 단계로 돌아가기 <small>${st - 1}. ${STAGES[st - 1].name}</small></button>`;
   }
   return h ? tool('leader', '이끔이 도구', h) : '';
 }
@@ -525,7 +559,7 @@ function pauseHtml() {
   if (!S.pauseOpen) return `<div class="cover calm"><div><h1>✋ 잠깐 멈춤</h1><p>숨 세 번 쉬자.</p><div class="count" data-tm="pause">10</div></div></div>`;
   return `<div class="cover calm"><div class="pausebox"><h2>✋ 잠깐 멈춤</h2>
     <ul class="mediations">${S.settings.mediations.slice(0, 3).map((m) => `<li>“${esc(m)}”</li>`).join('')}</ul>
-    <h3>어떤 방법으로 풀어 볼까?</h3><div class="methods three">${METHODS.slice(0, 3).map((m) => `<button class="method ${g.pause.pick === m.id ? 'on' : ''}" data-act="pausePick" data-id="${m.id}"><span>${m.icon}</span><b>${m.name}</b></button>`).join('')}</div>
+    <h3>어떤 방법으로 풀어 볼까?</h3><div class="methods three">${METHODS.map((m) => `<button class="method ${g.pause.pick === m.id ? 'on' : ''}" data-act="pausePick" data-id="${m.id}"><span>${m.icon}</span><b>${m.name}</b></button>`).join('')}</div>
     <div class="row"><button class="btn primary big" data-act="resume">다시 토의하기 ▶</button><button class="btn big" data-act="help">🙋 선생님 도와주세요</button></div></div></div>`;
 }
 function coverHtml() {

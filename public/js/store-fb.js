@@ -93,6 +93,10 @@ export async function create(config) {
       if (m && m.sid) { await api.syncClock(memberPath()); return m.sid; }
       return null;
     },
+    // 서버에서 확인된 값만 알린다(연결이 끊긴 동안의 '없음'은 무시)
+    watchMember(cb) {
+      return onSnapshot(doc(db, memberPath()), (s) => { if (s.exists() || !s.metadata.fromCache) cb(data(s)); }, onErr('members'));
+    },
     async logoutStudent() { await deleteDoc(doc(db, memberPath())).catch(() => {}); },
   };
   void user;

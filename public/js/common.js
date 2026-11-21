@@ -35,12 +35,12 @@ export const STAGES = [
 ];
 
 export const METHODS = [
-  { id: 'mix', icon: '🧩', name: '합치기', desc: '두 의견의 좋은 점을 섞는다.' },
+  { id: 'mix', icon: '🧩', name: '합치기', desc: '두 의견의 좋은 점을 섞는다. "네 의견에 이것만 넣자."도 합치기!' },
   { id: 'turn', icon: '🔁', name: '번갈아 하기', desc: '이번엔 네 의견, 다음엔 내 의견.' },
-  { id: 'cond', icon: '➕', name: '조건 붙이기', desc: '"네 의견으로 하되, 이것만 넣어 줘."' },
   { id: 'pick', icon: '✋', name: '고르기', desc: '이유를 한 번씩 더 말하고 손을 들어 정한다. (마지막 수단)' },
 ];
-export const methodName = (id) => (METHODS.find((m) => m.id === id) || {}).name || '';
+// 예전의 '조건 붙이기'(cond)는 합치기에 합쳤다
+export const methodName = (id) => (METHODS.find((m) => m.id === (id === 'cond' ? 'mix' : id)) || {}).name || '';
 
 const L = (leader, recorder, keeper, praiser) => ({ leader, recorder, keeper, praiser });
 export const DEFAULTS = {
