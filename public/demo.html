@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex">
+  <title>토의도우미 · 체험판 (선생님 + 1모둠 3명)</title>
+  <link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+  <div class="demo">
+    <div><span>선생님 화면 · <a href="#" id="reset" style="color:#ffd66b">체험 데이터 지우고 처음부터</a></span><iframe src="teacher.html?demo"></iframe></div>
+    <div><span>학생 1 (1번)</span><iframe src="index.html?demo&u=s01"></iframe></div>
+    <div><span>학생 2 (2번)</span><iframe src="index.html?demo&u=s02"></iframe></div>
+    <div><span>학생 3 (3번)</span><iframe src="index.html?demo&u=s03"></iframe></div>
+  </div>
+  <script>
+    document.getElementById('reset').onclick = function (e) {
+      e.preventDefault();
+      if (confirm('체험판 데이터를 모두 지울까요?')) { localStorage.setItem('toui-demo-db', '{}'); location.reload(); }
+    };
+  </script>
+</body>
+</html>

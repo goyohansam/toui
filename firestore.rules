@@ -1,0 +1,125 @@
+rules_version = '2';
+
+// 토의도우미 보안 규칙
+// 교사 계정은 이 파일에 적지 않습니다. Firebase 콘솔 → Firestore → 데이터에서
+// admins 컬렉션에 '교사 구글 계정 주소'를 문서 ID로 하는 문서를 만들면 그 계정이 교사가 됩니다.
+// (admins 컬렉션은 앱에서는 읽거나 쓸 수 없고 콘솔에서만 고칠 수 있습니다)
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() { return request.auth != null; }
+    function isTeacher() {
+      return signedIn() && 'email' in request.auth.token && request.auth.token.email_verified == true
+        && exists(/databases/$(database)/documents/admins/$(request.auth.token.email));
+    }
+
+    match /classes/{c} {
+      // 이 기기가 어느 학생으로 확인되었는지 (핀이 맞아야만 만들어지는 문서)
+      function me() {
+        return get(/databases/$(database)/documents/classes/$(c)/members/$(request.auth.uid)).data.sid;
+      }
+
+      allow read: if signedIn();
+      allow write: if isTeacher();
+
+      match /roster/{d} { allow read: if signedIn(); allow write: if isTeacher(); }
+      match /settings/{d} { allow read: if signedIn(); allow write: if isTeacher(); }
+
+      // 핀(해시)은 교사만 읽고 쓴다. 학생 기기는 읽지 못하고, 규칙이 대신 비교해 준다.
+      match /pins/{sid} { allow read, write: if isTeacher(); }
+
+      match /members/{uid} {
+        allow read: if isTeacher() || (signedIn() && request.auth.uid == uid);
+        allow create, update: if signedIn() && request.auth.uid == uid
+          && request.resource.data.keys().hasOnly(['sid', 'pinHash', 'at'])
+          && request.resource.data.pinHash ==
+             get(/databases/$(database)/documents/classes/$(c)/pins/$(request.resource.data.sid)).data.hash;
+        allow delete: if isTeacher() || (signedIn() && request.auth.uid == uid);
+      }
+
+      // 점수: 본인과 교사만 읽고, 교사만 쓴다.
+      match /students/{sid} {
+        allow read: if isTeacher() || (signedIn() && me() == sid);
+        allow write: if isTeacher();
+        match /pointLogs/{id} { allow read: if isTeacher() || (signedIn() && me() == sid); allow write: if isTeacher(); }
+        match /spendLogs/{id} { allow read: if isTeacher() || (signedIn() && me() == sid); allow write: if isTeacher(); }
+      }
+
+      match /sessions/{s} {
+        allow read: if signedIn();
+        allow write: if isTeacher();
+
+        function ses() { return get(/databases/$(database)/documents/classes/$(c)/sessions/$(s)).data; }
+
+        match /groups/{g} {
+          function grp() { return get(/databases/$(database)/documents/classes/$(c)/sessions/$(s)/groups/$(g)).data; }
+          function inGroup() { return signedIn() && me() in grp().members; }
+          function hasRole(r) { return r in grp().members[me()]; }
+          // '모두 멈춤'이나 모둠 잠금 중, 또는 토의방이 닫힌 뒤에는 학생이 쓸 수 없다.
+          function writable() {
+            return inGroup() && ses().status == 'open'
+              && ses().get('freeze', null) == null && grp().get('frozen', null) == null;
+          }
+
+          function changed() { return request.resource.data.diff(resource.data).affectedKeys(); }
+          function allowedKeys() {
+            let lead = hasRole('leader');
+            let keep = hasRole('keeper');
+            let moveStage = (lead && ses().mode == 'group')
+              || (resource.data.stage == 6 && request.resource.data.stage == 5);
+            return ['pause', 'help', 'pauseCount', 'agree', 'noteDone', 'rated', 'reflected']
+              .concat(lead ? ['speaker', 'timer', 'method'] : [])
+              .concat(moveStage ? ['stage', 'stageStart', 'extra', 'speaker', 'timer'] : [])
+              .concat(keep ? ['timer', 'speaker', 'beads', 'spoken'] : []);
+          }
+          // 동의·제출 표시는 자기 이름 칸만 바꿀 수 있다 (동의는 '아직이에요' 때 전체 비우기 허용)
+          function onlyMine(field) {
+            return !(field in changed())
+              || request.resource.data[field].diff(resource.data[field]).affectedKeys().hasOnly([me()]);
+          }
+          function agreeOk() {
+            return !('agree' in changed()) || request.resource.data.agree.size() == 0
+              || request.resource.data.agree.diff(resource.data.agree).affectedKeys().hasOnly([me()]);
+          }
+
+          allow read: if isTeacher() || (signedIn() && me() in resource.data.members);
+          allow create, delete: if isTeacher();
+          allow update: if isTeacher() || (
+            writable() && changed().hasOnly(allowedKeys())
+            && agreeOk() && onlyMine('noteDone') && onlyMine('rated') && onlyMine('reflected')
+          );
+
+          // 내 생각 쪽지: 공개 전에는 본인과 교사만
+          match /notes/{sid} {
+            allow read: if isTeacher() || (signedIn() && (me() == sid || (resource.data.public == true && inGroup())));
+            allow write: if isTeacher() || (writable() && me() == sid);
+          }
+          match /record/{d} {
+            allow read: if isTeacher() || inGroup();
+            allow write: if isTeacher() || (writable() && hasRole('recorder'));
+          }
+          match /stickers/{id} {
+            allow read: if isTeacher() || inGroup();
+            allow create: if writable() && hasRole('praiser') && request.resource.data.from == me();
+            allow update, delete: if isTeacher();
+          }
+          // 누가 '잠깐 멈춤'을 눌렀는지는 교사만 본다
+          match /pauseLogs/{id} {
+            allow read, delete: if isTeacher();
+            allow create: if writable() && request.resource.data.by == me();
+          }
+          // 별 평가: 본인만 한 번 쓰고, 고칠 수 없으며, 남의 것은 읽지 못한다
+          match /ratings/{rid} {
+            allow read: if isTeacher() || (signedIn() && me() == rid);
+            allow create: if writable() && me() == rid;
+            allow update, delete: if isTeacher();
+          }
+          match /reflections/{sid} {
+            allow read: if isTeacher() || (signedIn() && me() == sid);
+            allow write: if isTeacher() || (writable() && me() == sid);
+          }
+        }
+      }
+    }
+  }
+}

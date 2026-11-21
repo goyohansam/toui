@@ -1,0 +1,6 @@
+.DS_Store
+node_modules/
+.firebase/
+*.log
+# 학생 이름·핀이 든 파일은 저장소에 올리지 않습니다
+명렬*
