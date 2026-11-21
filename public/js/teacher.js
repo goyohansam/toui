@@ -297,6 +297,34 @@ const A = {
 
   // 누적·내보내기
   histReload: () => loadHist(true),
+  // 토의 한 번의 기록을 통째로 지운다 (연습으로 해 본 토의 정리용). 그 토의로 적립된 점수도 되돌린다.
+  async delSession(d) {
+    const h = (T.hist || []).find((x) => x.s.id === d.id);
+    if (!h) return;
+    if (!confirm(`${h.s.dateStr} "${h.s.topic}" 토의 기록을 지울까요?\n\n쪽지·기록·스티커·별 평가와, 이 토의로 적립된 점수가 함께 지워집니다.\n되돌릴 수 없습니다.`)) return;
+    T.busy = true; render();
+    try {
+      const p = `${C}/sessions/${d.id}`; const ops = [];
+      for (const { g } of h.gs) {
+        const gp = `${p}/groups/${g.id}`;
+        for (const c of ['ratings', 'stickers', 'notes', 'record', 'reflections', 'pauseLogs']) (await store.getCol(`${gp}/${c}`)).forEach((x) => ops.push({ op: 'del', path: `${gp}/${c}/${x.id}` }));
+        for (const sid of g.order || []) {
+          const lp = `${C}/students/${sid}/pointLogs/${d.id}`;
+          const log = await store.get(lp);
+          if (!log) continue;
+          ops.push({ op: 'set', path: `${C}/students/${sid}`, merge: true, data: { total: inc(-(log.total || 0)), listen: inc(-(log.listen || 0)), mediate: inc(-(log.mediate || 0)), together: inc(-(log.together || 0)), count: inc(-1) } });
+          ops.push({ op: 'del', path: lp });
+        }
+        ops.push({ op: 'del', path: gp });
+      }
+      ops.push({ op: 'del', path: p });
+      if (sesId() === d.id) ops.push({ op: 'set', path: C, data: { activeSession: null }, merge: true });
+      await store.batch(ops);
+      T.hist = null; T.who = null;
+      toast('토의 기록을 지웠습니다.');
+    } finally { T.busy = false; }
+    await loadHist(true); upd();
+  },
   who(d) { T.who = T.who === d.sid ? null : d.sid; render(); },
   csvRecords() {
     const rows = [['날짜', '주제', '모둠', '구성원(역할)', '나온 의견', '같은 점', '다른 점', '결정', '조율 방법', '까닭', '동의', '잠깐 멈춤 횟수']];
@@ -520,7 +548,7 @@ function histTab() {
       ${fl.length ? `<p class="flag">⚠ 반복 표시</p><ul>${fl.map((f) => `<li>${esc(f)}</li>`).join('')}</ul>` : ''}
       <table><tr><th>번호</th><th>이름</th><th>모둠</th><th>총점</th><th>👂 듣기</th><th>🤝 조율</th><th>🧩 함께</th><th>🎁 보너스</th><th>역할 이력</th><th>스티커</th><th>구슬</th><th>돌아보기 😀 (듣기/양보/역할)</th></tr>${rows}</table>
       <p class="muted">학생 줄을 누르면 토의별 내역(준 별·받은 별, 쪽지와 모둠 결정)이 열립니다.</p></div>
-    <div class="card"><h2>토의 목록</h2><table><tr><th>날짜</th><th>주제</th><th>모둠별 결정</th></tr>${[...T.hist].reverse().map(({ s, gs }) => `<tr><td>${esc(s.dateStr)}</td><td>${esc(s.topic)}</td><td>${gs.map(({ g, record }) => `<span class="tag">${esc(g.name)}</span> ${esc(record.decision || '-')}`).join('<br>')}</td></tr>`).join('')}</table></div>`;
+    <div class="card"><h2>토의 목록 <span class="muted">연습으로 해 본 토의는 ‘기록 지우기’로 정리할 수 있습니다. 그 토의로 쌓인 점수도 함께 빠집니다.</span></h2><table><tr><th>날짜</th><th>주제</th><th>모둠별 결정</th><th></th></tr>${[...T.hist].reverse().map(({ s, gs }) => `<tr><td style="white-space:nowrap">${esc(s.dateStr)}${s.id === sesId() && s.status === 'open' ? '<br><span class="tag green">열려 있음</span>' : ''}</td><td>${esc(s.topic)}</td><td>${gs.map(({ g, record }) => `<span class="tag">${esc(g.name)}</span> ${esc(record.decision || '-')}`).join('<br>')}</td><td><button class="btn danger" data-act="delSession" data-id="${s.id}">🗑 기록 지우기</button></td></tr>`).join('') || '<tr><td colspan="4">아직 토의 기록이 없습니다.</td></tr>'}</table></div>`;
 }
 
 function setTab() {
